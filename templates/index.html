@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Fish Length Predictor</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #0f172a;
+            color: white;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+
+        .card {
+            background: #111827;
+            padding: 30px;
+            border-radius: 16px;
+            width: 400px;
+            text-align: center;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        }
+
+        .dropzone {
+            border: 2px dashed #3b82f6;
+            padding: 20px;
+            border-radius: 12px;
+            cursor: pointer;
+            margin-bottom: 15px;
+        }
+
+        img {
+            max-width: 100%;
+            margin-top: 10px;
+            border-radius: 10px;
+            display: none;
+        }
+
+        button {
+            background: #3b82f6;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 8px;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+
+        button:disabled {
+            background: gray;
+        }
+
+        .result {
+            margin-top: 15px;
+            font-size: 18px;
+        }
+
+        .spinner {
+            display: none;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+
+<body>
+<div class="card">
+
+    <h2>🐟 Fish Length Predictor</h2>
+
+    <div class="dropzone" onclick="document.getElementById('fileInput').click()">
+        Click or drop image here
+    </div>
+
+    <input type="file" id="fileInput" hidden>
+
+    <img id="preview">
+
+    <button id="btn" onclick="predict()">Predict Length</button>
+
+    <div class="spinner" id="spinner">⏳ Predicting...</div>
+
+    <div class="result" id="result"></div>
+</div>
+
+<script>
+let file;
+
+document.getElementById("fileInput").addEventListener("change", (e) => {
+    file = e.target.files[0];
+
+    const img = document.getElementById("preview");
+    img.src = URL.createObjectURL(file);
+    img.style.display = "block";
+});
+
+async function predict() {
+    if (!file) return alert("Upload an image first!");
+
+    const formData = new FormData();
+    formData.append("image", file);
+
+    document.getElementById("spinner").style.display = "block";
+    document.getElementById("result").innerText = "";
+
+    const res = await fetch("/predict", {
+        method: "POST",
+        body: formData
+    });
+
+    const data = await res.json();
+
+    document.getElementById("spinner").style.display = "none";
+
+    document.getElementById("result").innerText =
+        `Predicted length: ${data.predicted_length_cm} cm`;
+}
+</script>
+
+</body>
+</html>
