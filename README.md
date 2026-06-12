@@ -1,6 +1,6 @@
 # Fish App
 
-A fish species identification application.
+A fish length estimation application.
 
 ## Author
 
@@ -30,4 +30,4 @@ python app.py
 
 ## Usage
 
-Visit the web application in your browser to identify fish species.
+Visit the web application in your browser to estimate fish length.
