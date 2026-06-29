@@ -15,14 +15,14 @@ IMG_SIZE = 392
 
 MODEL_PATH = "best_dino_fish_size_estimator.pth"
 # Updated to use your specified DINOv2 weights file ID
-MODEL_ID_2 = "1zNacRUxXxhyRTnXJpvl6vswz6F6gt3Jv"  
-
+#MODEL_ID_2 = "1zNacRUxXxhyRTnXJpvl6vswz6F6gt3Jv"  
+MODEL_ID_3 = "1usVuTs03l-k16bSFqfO40ooiJYY702bx"
 # -------------------------
 # DOWNLOAD MODEL IF NEEDED
 # -------------------------
 if not os.path.exists(MODEL_PATH):
     print("Downloading DINOv2 model from Google Drive...")
-    url = f"https://drive.google.com/uc?id={MODEL_ID_2}"
+    url = f"https://drive.google.com/uc?id={MODEL_ID_3}"
     gdown.download(url, MODEL_PATH, quiet=False)
 
 # -------------------------
@@ -34,7 +34,7 @@ app = Flask(__name__)
 # DINOv2 MODEL ARCHITECTURE
 # -------------------------
 class DinoSizeEstimator(nn.Module):
-    def __init__(self, model_variant="dinov2_vits14"):
+    def __init__(self, model_variant="dinov2_vitb14"):
         super().__init__()
         # Automatically hooks up Meta's baseline DINOv2 framework via PyTorch Hub
         self.backbone = torch.hub.load('facebookresearch/dinov2', model_variant)
@@ -62,7 +62,7 @@ class DinoSizeEstimator(nn.Module):
         return self.head(features)
 
 # Initialize wrapper, map weights dictionary, and move to target hardware
-model = DinoSizeEstimator(model_variant="dinov2_vits14")
+model = DinoSizeEstimator(model_variant="dinov2_vitb14")
 state_dict = torch.load(MODEL_PATH, map_location=DEVICE)
 model.load_state_dict(state_dict)
 
