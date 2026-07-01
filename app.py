@@ -2,55 +2,108 @@ import os
 import torch
 import torch.nn as nn
 from flask import Flask, request, render_template, jsonify
-from PIL import Image
+from PIL import Image, ImageFile
 import torchvision.transforms as transforms
+import torchvision.transforms.functional as TF
 import gdown
+
+# System Tuning
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+torch.backends.cudnn.benchmark = True
 
 # -------------------------
 # CONFIG
 # -------------------------
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# CRITICAL: DINOv2 uses patch sizes of 14, image dimension must be divisible by 14
-IMG_SIZE = 392  
+IMG_SIZE = 384  # CRITICAL: DINOv3 standardizes on 16px patch boundaries
 
-MODEL_PATH = "best_dino_fish_size_estimator.pth"
-# Updated to use your specified DINOv2 weights file ID
-#MODEL_ID_2 = "1zNacRUxXxhyRTnXJpvl6vswz6F6gt3Jv"  
-MODEL_ID_3 = "1usVuTs03l-k16bSFqfO40ooiJYY702bx"
+MODEL_PATH = "best_fish_size_estimator_dinov3_vits16.pth"
+MODEL_ID_3 = "1c9RHB-6tNY7YMBKg94wWKVLTymzCG7mX"
+
 # -------------------------
 # DOWNLOAD MODEL IF NEEDED
 # -------------------------
 if not os.path.exists(MODEL_PATH):
-    print("Downloading DINOv2 model from Google Drive...")
+    print("Downloading DINOv3 model from Google Drive...")
     url = f"https://drive.google.com/uc?id={MODEL_ID_3}"
     gdown.download(url, MODEL_PATH, quiet=False)
+
+
 
 # -------------------------
 # FLASK APP
 # -------------------------
 app = Flask(__name__)
 
-# -------------------------
-# DINOv2 MODEL ARCHITECTURE
-# -------------------------
-class DinoSizeEstimator(nn.Module):
-    def __init__(self, model_variant="dinov2_vitb14"):
-        super().__init__()
-        # Automatically hooks up Meta's baseline DINOv2 framework via PyTorch Hub
-        self.backbone = torch.hub.load('facebookresearch/dinov2', model_variant)
-        
-        if "vits14" in model_variant:
-            in_features = 384
-        elif "vitb14" in model_variant:
-            in_features = 768
-        elif "vitl14" in model_variant:
-            in_features = 1024
-        else:
-            raise ValueError("Unknown DINOv2 variant dimensions.")
+# ==============================================================================
+# SQUISH-FREE TRANSFORMS
+# ==============================================================================
+class SquarePadAndResize(object):
+    """Pads image evenly to a square maintaining true native aspect proportions."""
+    def __init__(self, target_size=384):
+        self.target_size = target_size
 
-        # Reconstructed Regression Head layout matching training configuration
+    def __call__(self, img):
+        w, h = img.size
+        max_wh = max(w, h)
+        hp = int((max_wh - w) / 2)
+        vp = int((max_wh - h) / 2)
+        padding = (hp, vp, hp, vp)
+        
+        img = TF.pad(img, padding, fill=0, padding_mode='constant')
+        img = TF.resize(img, (self.target_size, self.target_size))
+        return img
+
+# ==============================================================================
+# DINOv3 BACKBONE ARCHITECTURE SKELETON
+# ==============================================================================
+class MetaDinoBlock(nn.Module):
+    """Perfect key-matching block utilizing native optimized attention."""
+    def __init__(self, dim=384, num_heads=6):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(dim)
+        self.qkv = nn.Linear(dim, dim * 3)
+        self.proj = nn.Linear(dim, dim)
+        self.ls1 = nn.Parameter(torch.ones(dim)) 
+        
+        self.norm2 = nn.LayerNorm(dim)
+        self.fc1 = nn.Linear(dim, dim * 4)
+        self.fc2 = nn.Linear(dim * 4, dim)
+        self.ls2 = nn.Parameter(torch.ones(dim)) 
+        self.num_heads = num_heads
+
+    def forward(self, x):
+        B, N, C = x.shape
+        normed = self.norm1(x)
+        qkv = self.qkv(normed).reshape(B, N, 3, self.num_heads, C // self.num_heads)
+        
+        q = qkv[:, :, 0].transpose(1, 2)
+        k = qkv[:, :, 1].transpose(1, 2)
+        v = qkv[:, :, 2].transpose(1, 2)
+        
+        attn_out = torch.nn.functional.scaled_dot_product_attention(q, k, v)
+        attn_out = attn_out.transpose(1, 2).reshape(B, N, C)
+        x = x + self.ls1 * self.proj(attn_out)
+        
+        mlp_out = self.fc2(torch.nn.functional.gelu(self.fc1(self.norm2(x))))
+        x = x + self.ls2 * mlp_out
+        return x
+
+
+class DinoSizeEstimator(nn.Module):
+    def __init__(self):
+        super().__init__()
+        # Blueprint structural pipeline mirroring your single-task checkpoint
+        self.patch_embed = nn.Module()
+        self.patch_embed.proj = nn.Conv2d(3, 384, kernel_size=16, stride=16)
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, 384))
+        self.storage_tokens = nn.Parameter(torch.zeros(1, 4, 384))
+        self.blocks = nn.ModuleList([MetaDinoBlock() for _ in range(12)])
+        self.norm = nn.LayerNorm(384)
+        
+        # Sizing Head
         self.head = nn.Sequential(
-            nn.Linear(in_features, 256),
+            nn.Linear(384, 256),
             nn.LayerNorm(256),
             nn.GELU(),
             nn.Dropout(0.3),
@@ -58,22 +111,36 @@ class DinoSizeEstimator(nn.Module):
         )
 
     def forward(self, x):
-        features = self.backbone(x)
+        B = x.shape[0]
+        x = self.patch_embed.proj(x).flatten(2).transpose(1, 2)
+        cls_tokens = self.cls_token.expand(B, -1, -1)
+        storage_tokens = self.storage_tokens.expand(B, -1, -1)
+        x = torch.cat((cls_tokens, storage_tokens, x), dim=1)
+        
+        for block in self.blocks:
+            x = block(x)
+        x = self.norm(x)
+        
+        features = torch.mean(x[:, 5:, :], dim=1)
         return self.head(features)
 
-# Initialize wrapper, map weights dictionary, and move to target hardware
-model = DinoSizeEstimator(model_variant="dinov2_vitb14")
+
+# Initialize Model layout
+model = DinoSizeEstimator()
+
+print(f"Loading local DINOv3 model checkpoint state dict map...")
 state_dict = torch.load(MODEL_PATH, map_location=DEVICE)
 model.load_state_dict(state_dict)
 
 model.to(DEVICE)
 model.eval()
+print("-> DINOv3 Single-Task Sizing Server Engine initialized.")
 
 # -------------------------
-# TRANSFORM (Adjusted for DINOv2 canvas layout)
+# SQUISH-FREE PIPELINE TRANSFORM
 # -------------------------
 transform = transforms.Compose([
-    transforms.Resize((IMG_SIZE, IMG_SIZE)),
+    SquarePadAndResize(target_size=IMG_SIZE), # Preserves physical shapes
     transforms.ToTensor(),
     transforms.Normalize(
         mean=[0.485, 0.456, 0.406],
@@ -97,13 +164,14 @@ def predict():
     file = request.files["image"]
     image = Image.open(file.stream).convert("RGB")
 
-    image = transform(image).unsqueeze(0).to(DEVICE)
+    # Image tensor shape configuration formatting -> [1, 3, 384, 384]
+    image_tensor = transform(image).unsqueeze(0).to(DEVICE)
 
-    with torch.no_grad():
-        log_pred = model(image)
+    with torch.inference_mode():
+        size_logits = model(image_tensor)
 
-    # Revert target output values out of log-space back into centimeters
-    pred_length = torch.exp(log_pred).item()
+    # Size Resolution: Revert target from log-space into real centimeters
+    pred_length = torch.exp(size_logits).item()
 
     return jsonify({
         "predicted_length_cm": round(pred_length, 2)
