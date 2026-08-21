@@ -36,8 +36,10 @@ IMG_SIZE = 518
 # MODEL
 # ==============================================================================
 
-MODEL_PATH = "best_fish_size_estimator_dinov2_vitb14_V6.pth"
-MODEL_ID_DINOV2 = "1VkxJXaKHqdTXIhkp4gqS54TcQREgXu2j"
+
+
+MODEL_PATH = "best_fish_size_estimator_dinov2_vits14_DEV.pth"
+MODEL_ID_DINOV2 = "1dBEtRPt8rCKCf_mQLKd4IhB0F-2JXblU"
 
 
 # ==============================================================================
@@ -69,40 +71,22 @@ app = Flask(__name__)
 # SQUISH-FREE TRANSFORMS
 # ==============================================================================
 
+# ==============================================================================
+# 1. ASPECT-RATIO PRESERVING PAD TRANSFORM
+# ==============================================================================
 class SquarePadAndResize:
-    """
-    Pads image evenly to a square while maintaining
-    the original aspect ratio, then resizes to IMG_SIZE.
-    """
-
-    def __init__(self, target_size=392):
+    def __init__(self, target_size=518):  # 518/14 = 37 patches
         self.target_size = target_size
 
     def __call__(self, img):
-
         w, h = img.size
-
         max_wh = max(w, h)
-
         hp = int((max_wh - w) / 2)
         vp = int((max_wh - h) / 2)
-
         padding = (hp, vp, hp, vp)
 
-        # Pad without distorting the original image
-        img = TF.pad(
-            img,
-            padding,
-            fill=0,
-            padding_mode="constant"
-        )
-
-        # Resize to the model's expected input size
-        img = TF.resize(
-            img,
-            (self.target_size, self.target_size)
-        )
-
+        img = TF.pad(img, padding, fill=0)
+        img = TF.resize(img, (self.target_size, self.target_size))
         return img
 
 
@@ -110,32 +94,32 @@ class SquarePadAndResize:
 # DINOv2 BACKBONE ARCHITECTURE
 # ==============================================================================
 
-class DinoSizeEstimator(nn.Module):
-
-    def __init__(self, model_variant="dinov2_vitb14"):
+class DinoMobileSizeEstimator(nn.Module):
+    def __init__(self, model_variant="dinov2_vits14"):
         super().__init__()
-
-        # DINOv2 ViT-B/14
-        # Output feature dimension = 768
-        self.backbone = torch.hub.load(
-            "facebookresearch/dinov2",
-            model_variant,
-            pretrained=False
-        )
-
-        # EXACT regression head contained in the checkpoint:
-        # 768 -> 384 -> 1
+        self.backbone = torch.hub.load('facebookresearch/dinov2', model_variant, pretrained=True)
+        
+        # vits14 output dim: 384. Combine CLS (384) + Patch Mean (384) + Patch Max (384) = 1152
         self.head = nn.Sequential(
-            nn.Linear(768, 384),
+            nn.Linear(384 * 3, 384),
             nn.LayerNorm(384),
             nn.GELU(),
             nn.Dropout(0.2),
-            nn.Linear(384, 1)
+            nn.Linear(384, 128),
+            nn.GELU(),
+            nn.Linear(128, 1)
         )
 
     def forward(self, x):
-        features = self.backbone(x)
-        return self.head(features)
+        features = self.backbone.forward_features(x)
+        cls_token = features["x_norm_clstoken"]              # [B, 384]
+        patch_tokens = features["x_norm_patchtokens"]        # [B, N_patches, 384]
+        
+        patch_mean = patch_tokens.mean(dim=1)                # [B, 384]
+        patch_max = patch_tokens.max(dim=1)[0]               # [B, 384]
+        
+        combined = torch.cat([cls_token, patch_mean, patch_max], dim=-1) # [B, 1152]
+        return self.head(combined)
 
 
 # ==============================================================================
@@ -144,8 +128,8 @@ class DinoSizeEstimator(nn.Module):
 
 print("Initializing DINOv2 ViT-S/14 model...")
 
-model = DinoSizeEstimator(
-    model_variant="dinov2_vitb14"
+model = DinoMobileSizeEstimator(
+    model_variant="dinov2_vits14"
 )
 
 
