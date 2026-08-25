@@ -36,9 +36,9 @@ IMG_SIZE = 518
 # MODEL
 # ==============================================================================
 
-
-MODEL_PATH = "best_fish_size_estimator_dinov2_vits14_v20.pth"
-MODEL_ID_DINOV2 = "1ZTkf03isek297BJ2Ee-YX1oR5L_ZudEb"
+#https://drive.google.com/file/d/1356Fi2yHbTyFTRH5w6VitUaU3xHMFBiK/view?usp=drive_link
+MODEL_PATH = "best_fish_size_estimator_dinov2_vits14_v21.pth"
+MODEL_ID_DINOV2 = "1356Fi2yHbTyFTRH5w6VitUaU3xHMFBiK"
 
 
 # ==============================================================================
