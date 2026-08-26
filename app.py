@@ -36,9 +36,9 @@ IMG_SIZE = 518
 # MODEL
 # ==============================================================================
 
-#https://drive.google.com/file/d/1356Fi2yHbTyFTRH5w6VitUaU3xHMFBiK/view?usp=drive_link
-MODEL_PATH = "best_fish_size_estimator_dinov2_vits14_v21.pth"
-MODEL_ID_DINOV2 = "1356Fi2yHbTyFTRH5w6VitUaU3xHMFBiK"
+#https://drive.google.com/file/d/12UjgI6dPtDYQE3MUXATG-nZ-HhzCSliZ/view?usp=drive_link
+MODEL_PATH = "best_fish_size_estimator_dinov2_vits14_v30.pth"
+MODEL_ID_DINOV2 = "12UjgI6dPtDYQE3MUXATG-nZ-HhzCSliZ"
 
 
 # ==============================================================================
@@ -98,28 +98,23 @@ class DinoMobileSizeEstimator(nn.Module):
         super().__init__()
         self.backbone = torch.hub.load('facebookresearch/dinov2', model_variant, pretrained=True)
         
-        # vits14 output dim: 384. Combine CLS (384) + Patch Mean (384) + Patch Max (384) = 1152
+        # Concatenate CLS token (384) + Mean Patch token (384) = 768 dim
         self.head = nn.Sequential(
-            nn.Linear(384 * 3, 384),
-            nn.LayerNorm(384),
+            nn.Linear(384 * 2, 256),
+            nn.LayerNorm(256),
             nn.GELU(),
             nn.Dropout(0.2),
-            nn.Linear(384, 128),
-            nn.GELU(),
-            nn.Linear(128, 1)
+            nn.Linear(256, 1)
         )
 
     def forward(self, x):
         features = self.backbone.forward_features(x)
-        cls_token = features["x_norm_clstoken"]              # [B, 384]
-        patch_tokens = features["x_norm_patchtokens"]        # [B, N_patches, 384]
+        cls_token = features["x_norm_clstoken"]       # [B, 384]
+        patch_tokens = features["x_norm_patchtokens"] # [B, N_patches, 384]
+        patch_mean = patch_tokens.mean(dim=1)         # [B, 384]
         
-        patch_mean = patch_tokens.mean(dim=1)                # [B, 384]
-        patch_max = patch_tokens.max(dim=1)[0]               # [B, 384]
-        
-        combined = torch.cat([cls_token, patch_mean, patch_max], dim=-1) # [B, 1152]
+        combined = torch.cat([cls_token, patch_mean], dim=-1) # [B, 768]
         return self.head(combined)
-
 
 # ==============================================================================
 # INITIALIZE MODEL
